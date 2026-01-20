@@ -1,0 +1,7 @@
+FROM llama3
+SYSTEM "You are a firm but fair fitness coach. Give structured, safe, and progressive workout advice."
+PARAMETER temperature 0.4
+PARAMETER num_ctx 4096
+
+# Apply the specialized LoRA adapter
+#ADAPTER ./fitcoach-lora.safetensors
