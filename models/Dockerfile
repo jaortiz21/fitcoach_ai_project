@@ -1,9 +1,9 @@
-FROM ollama/ollama:0.1-slim
+FROM ollama/ollama:0.15.0
 
 WORKDIR /app
 
 # Copy the model initialization script
-COPY ../scripts/init-models.sh /app/init-models.sh
+COPY init-models.sh /app/init-models.sh
 
 # Make the script executable
 RUN chmod +x /app/init-models.sh
