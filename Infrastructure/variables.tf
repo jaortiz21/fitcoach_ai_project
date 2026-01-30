@@ -73,3 +73,9 @@ variable "desired_count_model" {
   type        = number
   default     = 1
 }
+
+variable "enable_nat_gateway" {
+  description = "Enable NAT Gateway for outbound internet access from private subnets"
+  type        = bool
+  default     = false
+}
