@@ -107,11 +107,25 @@ def warm_model():
 # ------------------ Database ------------------
 
 def get_db():
-    return sqlite3.connect(DB_PATH, check_same_thread=False)
+    # timeout= is SQLite's busy-wait before raising "database is locked";
+    # the PRAGMA sets it explicitly too since some SQLite builds only honor
+    # one or the other depending on version. Both matter once more than one
+    # request can be writing at the same time (multiple users chatting
+    # concurrently -- FastAPI runs these sync handlers in a thread pool, so
+    # this isn't hypothetical).
+    db = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
+    db.execute("PRAGMA busy_timeout = 30000")
+    return db
 
 
 def init_db():
     db = get_db()
+
+    # WAL lets readers and a writer proceed concurrently instead of
+    # serializing every connection behind the default rollback journal.
+    # This is a one-time, persistent setting on the db file, but cheap to
+    # re-assert on every startup.
+    db.execute("PRAGMA journal_mode=WAL")
 
     db.execute("""
         CREATE TABLE IF NOT EXISTS messages (
