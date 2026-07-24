@@ -2,6 +2,10 @@
 
 This repository contains a **memory‑aware chat API** designed to support long‑running conversations with automatic summarization, profile extraction, and safe message pruning. The system is intentionally built in **incremental layers**, starting with SQLite and Docker Compose, while being structured for a clean migration to Postgres and multi‑service deployment later.
 
+A static web frontend (`frontend/`) now ships alongside the API so the assistant can be used like any other chat product, not just via `curl`.
+
+For a deeper look at where the architecture has rough edges and what's worth fixing next, see [`ARCHITECTURE.md`](./ARCHITECTURE.md).
+
 ---
 
 ## What We’ve Built So Far
@@ -11,6 +15,8 @@ This repository contains a **memory‑aware chat API** designed to support long�
 * Supports **streaming** and **non‑streaming** chat endpoints
 * Messages are persisted per `conversation_id`
 * Compatible with local LLMs via **Ollama**
+* `/health` endpoint for liveness checks (used by the Docker healthcheck and the frontend's connection indicator)
+* CORS enabled so a browser-based frontend can call the API directly
 
 ### 2. Conversation Summarization
 
@@ -40,8 +46,11 @@ The system now includes **long‑term user memory** extracted from conversations
 3. Output is normalized into canonical values
 4. A diff is computed against existing profile memory
 5. Only **new or improved** data is persisted (guarded upsert)
+6. The stored profile is injected back into the system prompt on every chat turn, so the coach actually remembers goals/constraints/preferences across the conversation
 
 This prevents regressions and noisy overwrites.
+
+> Note: memory here is entirely SQLite-backed (raw messages + LLM summaries + structured profile fields). A Qdrant vector database is also provisioned in `docker-compose.yml`, but nothing in `app.py` calls it yet — see the "Qdrant" item in ARCHITECTURE.md.
 
 ---
 
@@ -64,6 +73,16 @@ This makes memory:
 * Ollama calls include **retry + backoff**
 * Model warming avoids cold‑start timeouts
 * Summarization failures do not block chat responses
+* SQLite runs in **WAL mode** with an explicit busy timeout, so concurrent requests from multiple conversations don't trip over each other with `database is locked` errors
+
+---
+
+### 6. Frontend
+
+* Single-file HTML/CSS/JS chat UI in `frontend/`, no build step or dependencies
+* Streams responses from `/chat`, shows a live online/offline indicator against `/health`
+* Keeps a sidebar of past conversations — **stored client-side in the browser's `localStorage`**, not fetched from the server, since the API doesn't currently expose an endpoint to list or retrieve past conversations (see TODO below)
+* Served via its own nginx container in `docker-compose.yml`
 
 ---
 
@@ -107,11 +126,8 @@ This makes memory:
 
 * Docker
 * Docker Compose v2
-* Ollama installed **or** running as a container
 
----
-
-### 1. Directory Layout
+### Directory Layout
 
 ```
 .
@@ -119,62 +135,69 @@ This makes memory:
 │   ├── app.py
 │   ├── requirements.txt
 │   └── Dockerfile
+├── frontend/
+│   ├── index.html
+│   ├── nginx.conf
+│   └── Dockerfile
+├── models/
+│   ├── Modelfile
+│   ├── init-models.sh
+│   └── Dockerfile        # used for the ECS/model image, not docker-compose
+├── Infrastructure/        # Terraform for an AWS ECS deployment target
 ├── docker-compose.yml
 └── data/
-    └── fitcoach.db
+    └── conversations.db   # created on first run, gitignored
 ```
 
----
+### Services & Ports
 
-### 2. Dockerfile (API)
+| Service    | Port                | Purpose                                   |
+| ---------- | -------------------- | ------------------------------------------ |
+| `frontend` | `8080` → 80          | Chat UI                                    |
+| `api`      | `8000` → 8000         | FastAPI backend                            |
+| `ollama`   | `11434` → 11434       | LLM runtime                                |
+| `qdrant`   | `6333`/`6334`         | Vector DB (provisioned, currently unused)  |
 
-```dockerfile
-FROM python:3.11-slim
+### Environment Variables (`api` service)
 
-WORKDIR /app
+All of these are read at startup with sensible defaults, so the API also runs standalone outside Docker:
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+| Variable                | Default                     | Purpose                                                       |
+| ------------------------ | ---------------------------- | -------------------------------------------------------------- |
+| `OLLAMA_HOST`            | `http://ollama:11434`        | Base URL of the Ollama server                                  |
+| `OLLAMA_MODEL`           | `fitcoach`                   | Model name to chat against                                     |
+| `DB_PATH`                | `data/conversations.db`      | SQLite file location                                            |
+| `CORS_ORIGINS`           | `*`                          | Comma-separated allowed origins for the frontend (compose sets this to `http://localhost:8080`) |
+| `SUMMARY_TRIGGER_TURNS`  | `5`                          | Turns before summarization kicks in                             |
+| `RECENT_TURNS`           | `4`                          | Verbatim turns kept after summarization                         |
 
-COPY . .
-
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
-```
-
----
-
-### 3. docker-compose.yml
-
-```yaml
-version: "3.9"
-
-services:
-  api:
-    build: ./api
-    ports:
-      - "8000:8000"
-    volumes:
-      - ./data:/data
-    environment:
-      - DB_PATH=/data/fitcoach.db
-      - OLLAMA_BASE_URL=http://host.docker.internal:11434
-    restart: unless-stopped
-```
-
-> I `host.docker.internal` allows the container to reach a locally running Ollama instance.
-
----
-
-### 4. Start the Stack
+### 1. Start the Stack
 
 ```bash
 docker compose up --build
 ```
 
-API will be available at:
+This brings up Ollama (pulling the base + embedding models and building the `fitcoach` model on first run — can take a few minutes), Qdrant, the API, and the frontend.
 
+### 2. Use it
+
+* **Chat UI:** open `http://localhost:8080`
+* **Direct API:**
+
+```bash
+curl http://localhost:8000/chat -H "Content-Type: application/json" -d "{\"conversation_id\":\"$CONVO_ID\", \"message\":\"Message\"}"
 ```
-http://localhost:8000
+
+* **Health check:**
+
+```bash
+curl http://localhost:8000/health
+```
+
+### Stop the Stack
+
+```bash
+docker compose down
 ```
 
 ---
@@ -190,7 +213,7 @@ docker compose exec api bash
 ### Inspect SQLite
 
 ```bash
-sqlite3 /data/fitcoach.db
+sqlite3 data/conversations.db
 .tables
 SELECT * FROM profile;
 ```
@@ -200,27 +223,17 @@ SELECT * FROM profile;
 * `[PROFILE EXTRACT RAW]`
 * `[PROFILE CANDIDATES NORMALIZED]`
 * `[PROFILE UPSERT]`
-* `[SUMMARY CREATED]`
+* `[SUMMARY]` (search for this prefix — logging is currently `print()`-based, see TODO)
 
 ---
 
 ## Known Intentional Limitations
 
-* SQLite is single‑writer
-* Profile memory is scoped per `conversation_id`
-* No auth / multi‑user separation yet
+* SQLite is single‑writer (mitigated with WAL mode, but still a ceiling at real scale)
+* Profile memory is scoped per `conversation_id`, not per authenticated user
+* No auth / multi‑user separation yet — anyone who knows a `conversation_id` can read/write it
 
-These are **deliberate**, to keep iteration speed high.
-
----
-
-## Next Planned Steps
-
-1. **Inject profile memory into chat prompts**
-2. Add confidence / reinforcement gating
-3. Migrate SQLite → Postgres
-4. Cross‑conversation memory
-5. Multi‑user support
+A full breakdown of these and other architectural tradeoffs is in [`ARCHITECTURE.md`](./ARCHITECTURE.md).
 
 ---
 
@@ -233,3 +246,35 @@ This system is built as:
 * Suitable for both Python *and* future Go backends
 
 If you understand this codebase, you understand how modern AI systems actually work.
+
+---
+
+## TODO
+
+Tracked here the same way we track work-in-progress in chat — status, then what it is. Update this list as items land instead of letting it go stale (the "Next Planned Steps" section this replaced hadn't been touched in 6 months, and by the time we looked at it, item #1 on it had quietly already been done).
+
+### Done (last 3 commits, dev branch)
+
+- [x] Fix `summarize()` crash — undefined variable + wrong types passed to `diff_profile()`, threw `NameError` on every summarization
+- [x] Fix streaming responses never being saved — persistence ran before the client had consumed any tokens
+- [x] Read `OLLAMA_HOST` / `OLLAMA_MODEL` / `DB_PATH` / `CORS_ORIGINS` from env instead of hardcoding
+- [x] Add `/health` endpoint, CORS middleware, pinned `requirements.txt`, Docker `HEALTHCHECK`
+- [x] Fix stale `docker-compose.yml` mount path that broke `docker compose up`
+- [x] Build static frontend (`frontend/`) and wire it into `docker-compose.yml`
+- [x] Write `ARCHITECTURE.md` architecture review
+- [x] Enable SQLite WAL mode + busy timeout for concurrent multi-user access
+
+### Not yet verified
+
+- [ ] **Load-test multi-user concurrency against a live stack.** The WAL/busy-timeout fix above was applied based on code inspection, not a live test — no docker/network access was available in the environment it was written in. Plan: run `docker compose up`, then a script that fires concurrent requests from several distinct `conversation_id`s and checks for cross-talk, lock errors, and broken streaming.
+- [ ] End-to-end smoke test of `/chat` (streaming + non-streaming) against a real Ollama model, not just a syntax check
+
+### Next up (from ARCHITECTURE.md, roughly priority order)
+
+- [ ] Decide on Qdrant: either wire up real embedding-based retrieval, or drop the container + `qdrant-client` dependency and correct the README/compose to describe SQLite-only memory
+- [ ] Add auth so `conversation_id` isn't a bare guessable secret — needed before this is exposed beyond your own network, per the "serve any consumer" goal
+- [ ] Add `GET`/`DELETE` endpoints for conversations, so the frontend's `localStorage` sidebar can become a real reflection of server state instead of a client-side-only mirror
+- [ ] Fix Terraform/ECS drift: no Qdrant task definition, API's EFS mount path (`/app/storage`) doesn't match where the app actually writes (`/app/data`), and `container_port_api`/`container_port_model` defaults look swapped
+- [ ] Add a minimal test suite + CI (even a smoke test would have caught the two bugs fixed in this round six months earlier)
+- [ ] Replace `print()` logging with Python's `logging` module
+- [ ] Move blocking `requests` calls to async `httpx` if concurrent load ever becomes a real bottleneck
