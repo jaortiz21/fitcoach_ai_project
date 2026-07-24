@@ -10,7 +10,10 @@ services:
     volumes:
       - ollama_data:/root/.ollama
       - ./models:/models
-      - ./scripts/init-models.sh:/init-models.sh
+      # NOTE: init-models.sh lives in ./models now (it moved out of ./scripts/
+      # in a previous commit); this mount was left pointing at the old path
+      # and would fail to start the stack.
+      - ./models/init-models.sh:/init-models.sh
     entrypoint: ["/bin/bash", "/init-models.sh"]
     environment:
       - OLLAMA_HOST=0.0.0.0

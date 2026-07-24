@@ -1,7 +1,9 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional, List
+import os
 import requests
 import json
 import sqlite3
@@ -50,18 +52,41 @@ def should_summarize(conversation_id: str) -> bool:
     return (datetime.utcnow() - last).seconds > 300
 
 # ------------------ Config ------------------
+# All of these are overridable via environment variables so the same image
+# works in docker-compose (see docker-compose.yml OLLAMA_HOST/OLLAMA_MODEL),
+# ECS (Infrastructure/*.tf), or plain local dev without code changes.
 
-OLLAMA_URL = "http://ollama:11434/api/chat"
-MODEL_NAME = "fitcoach"
+OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://ollama:11434")
+OLLAMA_URL = f"{OLLAMA_HOST.rstrip('/')}/api/chat"
+MODEL_NAME = os.environ.get("OLLAMA_MODEL", "fitcoach")
 
-DB_PATH = "data/conversations.db"
+DB_PATH = os.environ.get("DB_PATH", "data/conversations.db")
 
-SUMMARY_TRIGGER_TURNS = 5   # turns (user+assistant)
-RECENT_TURNS = 4             # turns to keep verbatim
+SUMMARY_TRIGGER_TURNS = int(os.environ.get("SUMMARY_TRIGGER_TURNS", "5"))   # turns (user+assistant)
+RECENT_TURNS = int(os.environ.get("RECENT_TURNS", "4"))                     # turns to keep verbatim
+
+# Comma-separated list of allowed browser origins for the frontend, e.g.
+# "http://localhost:8080,https://coach.example.com". Defaults to "*" for
+# homelab/local use -- tighten this before exposing the API publicly.
+CORS_ORIGINS = os.environ.get("CORS_ORIGINS", "*")
 
 # ------------------ App ------------------
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"] if CORS_ORIGINS == "*" else [o.strip() for o in CORS_ORIGINS.split(",")],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.get("/health")
+def health():
+    """Basic liveness/readiness check for docker healthchecks and the frontend."""
+    return {"status": "ok", "model": MODEL_NAME}
 
 @app.on_event("startup")
 def warm_model():
@@ -147,6 +172,26 @@ def load_profile(conversation_id: str) -> Optional[str]:
         parts.append(f"Preferences: {preferences}")
 
     return "\n".join(parts) if parts else None
+
+
+def load_profile_dict(conversation_id: str) -> Optional[dict]:
+    """Like load_profile(), but returns the raw {goals, constraints, preferences}
+    dict instead of a formatted string. Used by diff_profile() when computing
+    what changed, since load_profile()'s string output can't be diffed."""
+    db = get_db()
+    row = db.execute("""
+        SELECT goals, constraints, preferences
+        FROM profile
+        WHERE conversation_id = ?
+    """, (conversation_id,)).fetchone()
+    db.close()
+
+    if not row:
+        return None
+
+    goals, constraints, preferences = row
+    return {"goals": goals, "constraints": constraints, "preferences": preferences}
+
 
 def upsert_profile(conversation_id: str, updates: dict):
     db = get_db()
@@ -474,10 +519,10 @@ Conversation:
         return
     print(f"[PROFILE CANDIDATES NORMALIZED] {normalized}")
 
-    existing = load_profile(conversation_id)
+    existing = load_profile_dict(conversation_id)
     print(f"[PROFILE EXISTING] {existing}")
 
-    updates = diff_profile(conversation_id, updates)
+    updates = diff_profile(existing, normalized)
     print(f"[PROFILE UPDATES] {updates}")
 
     upsert_profile(conversation_id, updates)
@@ -597,28 +642,31 @@ def chat_streaming(message: str, conversation_id: Optional[str]):
     assistant_tokens = []
 
     def token_generator():
-        for line in resp.iter_lines():
-            if not line:
-                continue
-            payload = json.loads(line)
-            if "message" in payload:
-                token = payload["message"]["content"]
-                assistant_tokens.append(token)
-                yield token
+        # NOTE: this generator body only runs as the client consumes the
+        # StreamingResponse, so persistence and the summarization check must
+        # happen *after* the loop below (inside this generator), not right
+        # after StreamingResponse(...) is constructed -- at that point no
+        # tokens have been produced yet and assistant_tokens would be empty.
+        try:
+            for line in resp.iter_lines():
+                if not line:
+                    continue
+                payload = json.loads(line)
+                if "message" in payload:
+                    token = payload["message"]["content"]
+                    assistant_tokens.append(token)
+                    yield token
+        finally:
+            save_message(conversation_id, "user", message)
+            save_message(conversation_id, "assistant", "".join(assistant_tokens))
 
-    response = StreamingResponse(token_generator(), media_type="text/plain")
+            count = message_count(conversation_id)
+            print(f"[DEBUG] messages={count}")
 
-    # IMPORTANT: persistence happens outside the generator
-    save_message(conversation_id, "user", message)
-    save_message(conversation_id, "assistant", "".join(assistant_tokens))
+            if count >= SUMMARY_TRIGGER_TURNS * 2 and should_summarize(conversation_id):
+                summarize(conversation_id)
 
-    count = message_count(conversation_id)
-    print(f"[DEBUG] messages={count}")
-
-    if count >= SUMMARY_TRIGGER_TURNS * 2 and should_summarize(conversation_id):
-        summarize(conversation_id)
-
-    return response
+    return StreamingResponse(token_generator(), media_type="text/plain")
 
 
 # ------------------ API ------------------
