@@ -1,0 +1,641 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>FitCoach</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --panel-2: #1f232c;
+    --border: #2a2f3a;
+    --text: #e8eaed;
+    --text-dim: #9aa0ac;
+    --accent: #4f8cff;
+    --accent-dim: #2f4a80;
+    --user-bubble: #2b3550;
+    --bot-bubble: #1f232c;
+    --danger: #e5484d;
+    --ok: #3ecf8e;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    height: 100%;
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+
+  #app {
+    display: flex;
+    height: 100vh;
+    width: 100vw;
+    overflow: hidden;
+  }
+
+  /* Sidebar */
+  #sidebar {
+    width: 260px;
+    min-width: 260px;
+    background: var(--panel);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+  }
+
+  #sidebar-header {
+    padding: 16px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  #sidebar-header h1 {
+    font-size: 16px;
+    margin: 0 0 12px 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  #sidebar-header h1 .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--text-dim);
+    flex-shrink: 0;
+  }
+
+  #sidebar-header h1 .dot.ok { background: var(--ok); }
+  #sidebar-header h1 .dot.down { background: var(--danger); }
+
+  #new-chat-btn {
+    width: 100%;
+    padding: 10px 12px;
+    background: var(--accent);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  #new-chat-btn:hover { background: #3f7ae0; }
+
+  #conversation-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px;
+  }
+
+  .convo-item {
+    padding: 10px 12px;
+    border-radius: 8px;
+    margin-bottom: 4px;
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--text-dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .convo-item:hover { background: var(--panel-2); }
+  .convo-item.active { background: var(--panel-2); color: var(--text); }
+
+  .convo-item .del {
+    opacity: 0;
+    color: var(--text-dim);
+    flex-shrink: 0;
+    font-size: 14px;
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+
+  .convo-item:hover .del { opacity: 1; }
+  .convo-item .del:hover { color: var(--danger); background: rgba(229,72,77,0.1); }
+
+  #sidebar-footer {
+    padding: 12px 16px;
+    border-top: 1px solid var(--border);
+    font-size: 11px;
+    color: var(--text-dim);
+    line-height: 1.5;
+  }
+
+  /* Main chat pane */
+  #main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  #chat-header {
+    padding: 16px 24px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  #chat-header .title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-dim);
+  }
+
+  #messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  #messages:empty::before {
+    content: "Say hello to your coach to get started.";
+    color: var(--text-dim);
+    font-size: 14px;
+    margin: auto;
+  }
+
+  .msg-row {
+    display: flex;
+    max-width: 720px;
+    width: 100%;
+    margin: 0 auto;
+  }
+
+  .msg-row.user { justify-content: flex-end; }
+  .msg-row.assistant { justify-content: flex-start; }
+
+  .bubble {
+    padding: 12px 16px;
+    border-radius: 14px;
+    font-size: 14px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    max-width: 80%;
+  }
+
+  .msg-row.user .bubble {
+    background: var(--user-bubble);
+    border-bottom-right-radius: 4px;
+  }
+
+  .msg-row.assistant .bubble {
+    background: var(--bot-bubble);
+    border: 1px solid var(--border);
+    border-bottom-left-radius: 4px;
+  }
+
+  .bubble.error {
+    background: rgba(229,72,77,0.1);
+    border: 1px solid var(--danger);
+    color: #ffb4b6;
+  }
+
+  .typing-dots span {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    margin-right: 3px;
+    border-radius: 50%;
+    background: var(--text-dim);
+    animation: blink 1.2s infinite;
+  }
+  .typing-dots span:nth-child(2) { animation-delay: 0.2s; }
+  .typing-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+  @keyframes blink {
+    0%, 80%, 100% { opacity: 0.2; }
+    40% { opacity: 1; }
+  }
+
+  #composer {
+    padding: 16px 24px 24px;
+    border-top: 1px solid var(--border);
+  }
+
+  #composer-inner {
+    max-width: 720px;
+    margin: 0 auto;
+    display: flex;
+    gap: 10px;
+    align-items: flex-end;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 8px 8px 8px 16px;
+  }
+
+  #composer-inner:focus-within {
+    border-color: var(--accent);
+  }
+
+  #msg-input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: var(--text);
+    font-size: 14px;
+    font-family: inherit;
+    resize: none;
+    max-height: 160px;
+    padding: 8px 0;
+  }
+
+  #msg-input::placeholder { color: var(--text-dim); }
+
+  #send-btn {
+    background: var(--accent);
+    color: white;
+    border: none;
+    border-radius: 10px;
+    width: 36px;
+    height: 36px;
+    flex-shrink: 0;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  #send-btn:disabled {
+    background: var(--accent-dim);
+    cursor: not-allowed;
+  }
+
+  #send-btn svg { width: 16px; height: 16px; }
+
+  #api-config {
+    font-size: 11px;
+    color: var(--text-dim);
+    text-align: center;
+    margin-top: 10px;
+  }
+
+  #api-config a {
+    color: var(--text-dim);
+    text-decoration: underline;
+    cursor: pointer;
+  }
+
+  ::-webkit-scrollbar { width: 8px; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="sidebar">
+    <div id="sidebar-header">
+      <h1><span id="status-dot" class="dot"></span><span id="status-text">FitCoach</span></h1>
+      <button id="new-chat-btn">+ New conversation</button>
+    </div>
+    <div id="conversation-list"></div>
+    <div id="sidebar-footer">
+      Conversations are stored on the FitCoach server by ID, and mirrored
+      here in your browser so you can switch between them. Clearing your
+      browser storage won't delete them server-side, it just forgets the IDs.
+    </div>
+  </div>
+
+  <div id="main">
+    <div id="chat-header">
+      <div class="title" id="active-convo-title">New conversation</div>
+    </div>
+    <div id="messages"></div>
+    <div id="composer">
+      <div id="composer-inner">
+        <textarea id="msg-input" rows="1" placeholder="Message your coach..."></textarea>
+        <button id="send-btn" title="Send">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="12" y1="19" x2="12" y2="5"></line>
+            <polyline points="5 12 12 5 19 12"></polyline>
+          </svg>
+        </button>
+      </div>
+      <div id="api-config">API: <span id="api-base-label"></span> · <a id="change-api-link">change</a></div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---------------------------------------------------------------------
+  // Config
+  // ---------------------------------------------------------------------
+  // The API base can be overridden at deploy time by setting
+  // window.FITCOACH_API_BASE in a small script tag before this one loads
+  // (e.g. injected by the nginx entrypoint from an env var), or by the user
+  // via the "change" link, which persists it to localStorage. Falls back to
+  // assuming the API is reachable on port 8000 of whatever host is serving
+  // this page.
+  const STORAGE_KEYS = {
+    apiBase: "fitcoach.apiBase",
+    conversations: "fitcoach.conversations", // { id: { title, messages: [{role, content}] } }
+    activeId: "fitcoach.activeId",
+  };
+
+  function defaultApiBase() {
+    if (window.FITCOACH_API_BASE) return window.FITCOACH_API_BASE;
+    const { protocol, hostname } = window.location;
+    return `${protocol}//${hostname}:8000`;
+  }
+
+  function getApiBase() {
+    return localStorage.getItem(STORAGE_KEYS.apiBase) || defaultApiBase();
+  }
+
+  function setApiBase(url) {
+    localStorage.setItem(STORAGE_KEYS.apiBase, url);
+  }
+
+  // ---------------------------------------------------------------------
+  // State
+  // ---------------------------------------------------------------------
+  function loadConversations() {
+    try {
+      return JSON.parse(localStorage.getItem(STORAGE_KEYS.conversations)) || {};
+    } catch (e) {
+      return {};
+    }
+  }
+
+  function saveConversations(convos) {
+    localStorage.setItem(STORAGE_KEYS.conversations, JSON.stringify(convos));
+  }
+
+  let conversations = loadConversations();
+  let activeId = localStorage.getItem(STORAGE_KEYS.activeId);
+
+  function uuid() {
+    if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+    return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
+      const r = (Math.random() * 16) | 0;
+      const v = c === "x" ? r : (r & 0x3) | 0x8;
+      return v.toString(16);
+    });
+  }
+
+  function ensureActiveConversation() {
+    if (activeId && conversations[activeId]) return;
+    createConversation();
+  }
+
+  function createConversation() {
+    const id = uuid();
+    conversations[id] = { title: "New conversation", messages: [] };
+    activeId = id;
+    saveConversations(conversations);
+    localStorage.setItem(STORAGE_KEYS.activeId, activeId);
+    renderSidebar();
+    renderMessages();
+  }
+
+  function setActiveConversation(id) {
+    if (!conversations[id]) return;
+    activeId = id;
+    localStorage.setItem(STORAGE_KEYS.activeId, activeId);
+    renderSidebar();
+    renderMessages();
+  }
+
+  function deleteConversation(id, evt) {
+    if (evt) evt.stopPropagation();
+    delete conversations[id];
+    saveConversations(conversations);
+    if (activeId === id) {
+      activeId = null;
+      const remaining = Object.keys(conversations);
+      if (remaining.length) {
+        setActiveConversation(remaining[0]);
+      } else {
+        createConversation();
+      }
+    } else {
+      renderSidebar();
+    }
+  }
+
+  function titleFor(convo, fallbackMessage) {
+    if (convo.title && convo.title !== "New conversation") return convo.title;
+    const text = fallbackMessage || (convo.messages[0] && convo.messages[0].content) || "New conversation";
+    return text.length > 40 ? text.slice(0, 40) + "..." : text;
+  }
+
+  // ---------------------------------------------------------------------
+  // Rendering
+  // ---------------------------------------------------------------------
+  const sidebarList = document.getElementById("conversation-list");
+  const messagesEl = document.getElementById("messages");
+  const activeTitleEl = document.getElementById("active-convo-title");
+
+  function renderSidebar() {
+    sidebarList.innerHTML = "";
+    const ids = Object.keys(conversations).sort((a, b) => {
+      // most recently active/created first; we don't track timestamps, so
+      // just keep insertion order reversed as a reasonable proxy.
+      return conversations[b].createdAt - conversations[a].createdAt;
+    });
+
+    ids.forEach((id) => {
+      const convo = conversations[id];
+      const item = document.createElement("div");
+      item.className = "convo-item" + (id === activeId ? " active" : "");
+
+      const label = document.createElement("span");
+      label.textContent = titleFor(convo);
+      item.appendChild(label);
+
+      const del = document.createElement("span");
+      del.className = "del";
+      del.textContent = "×";
+      del.title = "Remove from this list (does not delete server-side history)";
+      del.addEventListener("click", (e) => deleteConversation(id, e));
+      item.appendChild(del);
+
+      item.addEventListener("click", () => setActiveConversation(id));
+      sidebarList.appendChild(item);
+    });
+
+    const convo = conversations[activeId];
+    activeTitleEl.textContent = convo ? titleFor(convo) : "New conversation";
+  }
+
+  function renderMessages() {
+    messagesEl.innerHTML = "";
+    const convo = conversations[activeId];
+    if (!convo) return;
+    convo.messages.forEach((m) => appendBubble(m.role, m.content));
+    scrollToBottom();
+  }
+
+  function appendBubble(role, content, opts) {
+    opts = opts || {};
+    const row = document.createElement("div");
+    row.className = "msg-row " + role;
+    const bubble = document.createElement("div");
+    bubble.className = "bubble" + (opts.error ? " error" : "");
+    bubble.textContent = content;
+    row.appendChild(bubble);
+    messagesEl.appendChild(row);
+    return bubble;
+  }
+
+  function scrollToBottom() {
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  // ---------------------------------------------------------------------
+  // API calls
+  // ---------------------------------------------------------------------
+  const statusDot = document.getElementById("status-dot");
+  const statusText = document.getElementById("status-text");
+
+  async function checkHealth() {
+    try {
+      const res = await fetch(getApiBase() + "/health", { method: "GET" });
+      if (!res.ok) throw new Error("bad status");
+      statusDot.className = "dot ok";
+      statusText.textContent = "FitCoach";
+    } catch (e) {
+      statusDot.className = "dot down";
+      statusText.textContent = "FitCoach (offline)";
+    }
+  }
+
+  async function sendMessage(text) {
+    const convo = conversations[activeId];
+    convo.messages.push({ role: "user", content: text });
+    convo.createdAt = convo.createdAt || Date.now();
+    if (convo.title === "New conversation") convo.title = titleFor(convo, text);
+    saveConversations(conversations);
+    renderSidebar();
+    appendBubble("user", text);
+
+    const typingBubble = appendBubble("assistant", "");
+    typingBubble.innerHTML = '<span class="typing-dots"><span></span><span></span><span></span></span>';
+    scrollToBottom();
+
+    setSending(true);
+
+    try {
+      const res = await fetch(getApiBase() + "/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: text,
+          conversation_id: activeId,
+          stream: true,
+        }),
+      });
+
+      if (!res.ok || !res.body) {
+        throw new Error(`Request failed (${res.status})`);
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let full = "";
+      typingBubble.textContent = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        if (!chunk) continue;
+        full += chunk;
+        typingBubble.textContent = full;
+        scrollToBottom();
+      }
+
+      if (!full) {
+        typingBubble.textContent = "(no response)";
+      }
+
+      convo.messages.push({ role: "assistant", content: full });
+      saveConversations(conversations);
+    } catch (err) {
+      typingBubble.classList.add("error");
+      typingBubble.textContent =
+        "Couldn't reach FitCoach at " + getApiBase() + ". Is the API running? (" + err.message + ")";
+    } finally {
+      setSending(false);
+      checkHealth();
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // Composer
+  // ---------------------------------------------------------------------
+  const input = document.getElementById("msg-input");
+  const sendBtn = document.getElementById("send-btn");
+
+  function setSending(isSending) {
+    sendBtn.disabled = isSending;
+    input.disabled = isSending;
+    if (!isSending) input.focus();
+  }
+
+  function autoResize() {
+    input.style.height = "auto";
+    input.style.height = Math.min(input.scrollHeight, 160) + "px";
+  }
+
+  function handleSend() {
+    const text = input.value.trim();
+    if (!text || sendBtn.disabled) return;
+    input.value = "";
+    autoResize();
+    sendMessage(text);
+  }
+
+  input.addEventListener("input", autoResize);
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleSend();
+    }
+  });
+  sendBtn.addEventListener("click", handleSend);
+
+  document.getElementById("new-chat-btn").addEventListener("click", createConversation);
+
+  const apiBaseLabel = document.getElementById("api-base-label");
+  document.getElementById("change-api-link").addEventListener("click", () => {
+    const current = getApiBase();
+    const next = window.prompt("FitCoach API base URL:", current);
+    if (next && next.trim()) {
+      setApiBase(next.trim().replace(/\/$/, ""));
+      apiBaseLabel.textContent = getApiBase();
+      checkHealth();
+    }
+  });
+
+  // ---------------------------------------------------------------------
+  // Init
+  // ---------------------------------------------------------------------
+  ensureActiveConversation();
+  apiBaseLabel.textContent = getApiBase();
+  renderSidebar();
+  renderMessages();
+  checkHealth();
+  input.focus();
+})();
+</script>
+</body>
+</html>

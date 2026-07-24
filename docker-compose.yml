@@ -41,8 +41,26 @@ services:
       - OLLAMA_HOST=http://ollama:11434
       - QDRANT_HOST=http://qdrant:6333
       - OLLAMA_MODEL=fitcoach:latest
+      # Frontend's origin. Tighten/extend this (comma-separated) before
+      # exposing the API beyond your own machine/network.
+      - CORS_ORIGINS=http://localhost:8080
     volumes:
       - ./data:/app/data
+
+  frontend:
+    build: ./frontend
+    container_name: fitcoach-frontend
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "8080:80"
+    # No API base is injected here: it's a plain static nginx image with no
+    # templating, so index.html's JS just derives the API URL from
+    # window.location.hostname at runtime (defaults to <same host>:8000,
+    # which is correct for this compose file). Use the "change" link in the
+    # UI, or edit frontend/index.html's defaultApiBase(), if you deploy the
+    # frontend and API on different hosts.
 
 volumes:
   ollama_data:
